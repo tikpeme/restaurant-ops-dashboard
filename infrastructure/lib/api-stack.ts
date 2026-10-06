@@ -48,7 +48,6 @@ export class ApiStack extends cdk.Stack {
         stageName: "v1",
       },
     });
-    d;
     const reportsResource = this.api.root.addResource("reports");
     reportsResource.addMethod(
       "POST",
@@ -85,5 +84,9 @@ export class ApiStack extends cdk.Stack {
         authorizer,
       },
     );
+    new cdk.CfnOutput(this, "ApiUrl", {
+      value: this.api.url,
+      exportName: "RestaurantOpsApiUrl",
+    });
   }
 }
