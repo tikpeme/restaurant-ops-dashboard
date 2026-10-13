@@ -26,17 +26,23 @@ export class AuthStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
-    new cognito.UserPoolIdentityProviderGoogle(this, "GoogleProvider", {
-      userPool: this.userPool,
-      clientId: process.env.GOOGLE_CLIENT_ID || "placeholder",
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET || "placeholder",
-      scopes: ["email", "profile", "openid"],
-      attributeMapping: {
-        email: cognito.ProviderAttribute.GOOGLE_EMAIL,
-        givenName: cognito.ProviderAttribute.GOOGLE_GIVEN_NAME,
-        familyName: cognito.ProviderAttribute.GOOGLE_FAMILY_NAME,
+    const googleProvider = new cognito.UserPoolIdentityProviderGoogle(
+      this,
+      "GoogleProvider",
+      {
+        userPool: this.userPool,
+        clientId: process.env.GOOGLE_CLIENT_ID || "placeholder",
+        clientSecretValue: cdk.SecretValue.unsafePlainText(
+          process.env.GOOGLE_CLIENT_SECRET || "placeholder",
+        ),
+        scopes: ["email", "profile", "openid"],
+        attributeMapping: {
+          email: cognito.ProviderAttribute.GOOGLE_EMAIL,
+          givenName: cognito.ProviderAttribute.GOOGLE_GIVEN_NAME,
+          familyName: cognito.ProviderAttribute.GOOGLE_FAMILY_NAME,
+        },
       },
-    });
+    );
 
     this.userPoolClient = new cognito.UserPoolClient(this, "UserPoolClient", {
       userPool: this.userPool,
@@ -54,6 +60,13 @@ export class AuthStack extends cdk.Stack {
       supportedIdentityProviders: [
         cognito.UserPoolClientIdentityProvider.GOOGLE,
       ],
+    });
+    this.userPoolClient.node.addDependency(googleProvider);
+
+    this.userPool.addDomain("CognitoDomain", {
+      cognitoDomain: {
+        domainPrefix: "restaurant-ops-dashboard",
+      },
     });
 
     new cdk.CfnOutput(this, "UserPoolId", {
