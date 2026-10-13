@@ -8,10 +8,17 @@ import {
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 import { randomUUID } from "crypto";
+import {
+  EventBridgeClient,
+  PutEventsCommand,
+} from "@aws-sdk/client-eventbridge";
 
 const client = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(client);
 const TABLE_NAME = process.env.TABLE_NAME!;
+
+const eventBridgeClient = new EventBridgeClient({});
+const EVENT_BUS_NAME = process.env.EVENT_BUS_NAME!;
 
 export const handler = async (
   event: APIGatewayProxyEvent,
@@ -48,6 +55,27 @@ export const handler = async (
           },
         }),
       );
+      // Fire alert if revenue is below target
+      if (body.revenue < body.revenueTarget) {
+        await eventBridgeClient.send(
+          new PutEventsCommand({
+            Entries: [
+              {
+                Source: "restaurant.ops",
+                DetailType: "LowRevenueAlert",
+                Detail: JSON.stringify({
+                  locationId: body.locationId,
+                  reportDate: body.reportDate,
+                  revenue: body.revenue,
+                  revenueTarget: body.revenueTarget,
+                  shortfall: body.revenueTarget - body.revenue,
+                }),
+                EventBusName: EVENT_BUS_NAME,
+              },
+            ],
+          }),
+        );
+      }
 
       return {
         statusCode: 201,
