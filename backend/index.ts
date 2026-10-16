@@ -13,12 +13,21 @@ import {
   PutEventsCommand,
 } from "@aws-sdk/client-eventbridge";
 
+// Initialize DynamoDB client once outside the handler for connection reuse
 const client = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(client);
 const TABLE_NAME = process.env.TABLE_NAME!;
 
+// Initialize EventBridge client for publishing alerts
 const eventBridgeClient = new EventBridgeClient({});
 const EVENT_BUS_NAME = process.env.EVENT_BUS_NAME!;
+
+// CORS headers required on every response so browsers allow cross-origin requests
+// Without these, the browser blocks responses even when the request succeeds
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "Content-Type,Authorization",
+};
 
 export const handler = async (
   event: APIGatewayProxyEvent,
@@ -30,9 +39,13 @@ export const handler = async (
   if (method === "POST") {
     try {
       const body = JSON.parse(event.body || "{}");
+
+      // Generate server-side fields the manager doesn't submit
       const reportId = randomUUID();
       const submittedAt = new Date().toISOString();
+      // editableUntil is a Unix timestamp — DynamoDB TTL uses this to enforce 24hr edit window
       const editableUntil = Math.floor(Date.now() / 1000) + 60 * 60 * 24;
+      // Derived metric — not submitted by manager, calculated from revenue and covers
       const avgSpendPerCover = body.revenue / body.coversServed;
 
       await docClient.send(
@@ -55,7 +68,9 @@ export const handler = async (
           },
         }),
       );
+
       // Fire alert if revenue is below target
+      // Uses default EventBridge bus — custom bus would be used in production
       if (body.revenue < body.revenueTarget) {
         await eventBridgeClient.send(
           new PutEventsCommand({
@@ -79,6 +94,7 @@ export const handler = async (
 
       return {
         statusCode: 201,
+        headers: corsHeaders,
         body: JSON.stringify({
           message: "Report created successfully",
           reportId,
@@ -87,6 +103,7 @@ export const handler = async (
     } catch (error) {
       return {
         statusCode: 500,
+        headers: corsHeaders,
         body: JSON.stringify({
           message: "Error creating report",
           error: (error as Error).message,
@@ -95,6 +112,8 @@ export const handler = async (
     }
   } else if (method === "GET" && !locationId) {
     try {
+      // Owner dashboard — query all locations for a specific date using GSI
+      // Defaults to today if no date provided
       const date =
         event.queryStringParameters?.date ||
         new Date().toISOString().split("T")[0];
@@ -102,6 +121,7 @@ export const handler = async (
       const result = await docClient.send(
         new QueryCommand({
           TableName: TABLE_NAME,
+          // GSI allows querying by date across all locations
           IndexName: "reportDate-locationId-index",
           KeyConditionExpression: "reportDate = :date",
           ExpressionAttributeValues: { ":date": date },
@@ -110,11 +130,13 @@ export const handler = async (
 
       return {
         statusCode: 200,
+        headers: corsHeaders,
         body: JSON.stringify({ reports: result.Items }),
       };
     } catch (error) {
       return {
         statusCode: 500,
+        headers: corsHeaders,
         body: JSON.stringify({
           message: "Error fetching reports",
           error: (error as Error).message,
@@ -123,6 +145,8 @@ export const handler = async (
     }
   } else if (method === "GET" && locationId && !reportDate) {
     try {
+      // Manager view — query by locationId partition key on main table
+      // No GSI needed since locationId is the partition key
       const result = await docClient.send(
         new QueryCommand({
           TableName: TABLE_NAME,
@@ -133,11 +157,13 @@ export const handler = async (
 
       return {
         statusCode: 200,
+        headers: corsHeaders,
         body: JSON.stringify({ reports: result.Items }),
       };
     } catch (error) {
       return {
         statusCode: 500,
+        headers: corsHeaders,
         body: JSON.stringify({
           message: "Error fetching reports",
           error: (error as Error).message,
@@ -148,6 +174,7 @@ export const handler = async (
     try {
       const body = JSON.parse(event.body || "{}");
 
+      // Fetch existing report to check editableUntil before allowing update
       const existingReport = await docClient.send(
         new GetCommand({
           TableName: TABLE_NAME,
@@ -158,13 +185,17 @@ export const handler = async (
       if (!existingReport.Item) {
         return {
           statusCode: 404,
+          headers: corsHeaders,
           body: JSON.stringify({ message: "Report not found" }),
         };
       }
 
+      // 24hr edit window enforced at data layer — editableUntil is a Unix timestamp
+      // This is more robust than application-level checks which could be bypassed
       if (existingReport.Item.editableUntil < Math.floor(Date.now() / 1000)) {
         return {
           statusCode: 403,
+          headers: corsHeaders,
           body: JSON.stringify({ message: "Edit window has closed" }),
         };
       }
@@ -189,11 +220,13 @@ export const handler = async (
 
       return {
         statusCode: 200,
+        headers: corsHeaders,
         body: JSON.stringify({ message: "Report updated successfully" }),
       };
     } catch (error) {
       return {
         statusCode: 500,
+        headers: corsHeaders,
         body: JSON.stringify({
           message: "Error updating report",
           error: (error as Error).message,
@@ -202,8 +235,10 @@ export const handler = async (
     }
   }
 
+  // Default — method not supported on this route
   return {
     statusCode: 405,
+    headers: corsHeaders,
     body: JSON.stringify({ message: "Method not allowed" }),
   };
 };

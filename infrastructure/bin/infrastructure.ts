@@ -10,7 +10,7 @@ const env = {
   account: process.env.CDK_DEFAULT_ACCOUNT,
   region: process.env.CDK_DEFAULT_REGION,
 };
-const ownerEmail = process.env.OWNER_EMAIL || "teteikpeme@gmail.com";
+const ownerEmail = process.env.OWNER_EMAIL || "tete.ikpeme@gmail.com";
 
 const app = new cdk.App();
 
