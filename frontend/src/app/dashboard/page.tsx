@@ -4,38 +4,29 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { getCurrentUser, fetchAuthSession } from "aws-amplify/auth";
 
-// API URL from environment variables — never hardcoded
+// API URL from environment variables, never hardcoded
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
 
 export default function DashboardPage() {
   const router = useRouter();
 
-  // loading — prevents rendering before auth check completes
+  // loading: prevents rendering before the first fetch completes
   const [loading, setLoading] = useState(true);
-  // reports — array of location report objects from the API
+  // reports: array of location report objects from the API
   const [reports, setReports] = useState<any[]>([]);
-  // date — currently selected date for the dashboard view, defaults to today
-  // Arrow function used to avoid Next.js prerender warning with new Date()
-  const [date, setDate] = useState(
-    () => new Date().toISOString().split("T")[0],
-  );
+  // date starts empty and is set in useEffect, so "today" is computed in the
+  // browser instead of being frozen at build time
+  const [date, setDate] = useState("");
 
-  const fetchReports = async () => {
+  const fetchReports = async (reportDate: string) => {
     try {
-      // Get the current Cognito session to extract the JWT token
+      // Get the JWT from the current Cognito session
       const session = await fetchAuthSession();
       const token = session.tokens?.idToken?.toString();
 
-      console.log("Session:", session);
-      console.log("Token:", token);
-      console.log("API URL:", API_URL);
-
-      // Pass JWT in Authorization header — API Gateway verifies against Cognito
-      // before forwarding to Lambda
-      const response = await fetch(`${API_URL}/reports?date=${date}`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+      // API Gateway verifies the token against Cognito before invoking Lambda
+      const response = await fetch(`${API_URL}/reports?date=${reportDate}`, {
+        headers: { Authorization: `Bearer ${token}` },
       });
 
       const data = await response.json();
@@ -43,20 +34,24 @@ export default function DashboardPage() {
     } catch (error) {
       console.error("Error fetching reports:", error);
     } finally {
-      // Always stop loading whether fetch succeeded or failed
       setLoading(false);
     }
   };
 
+  // Effect 1: set today's date once, on mount (browser only)
   useEffect(() => {
-    // Route guard — redirect to login if not authenticated
-    // Also fetches reports if user is logged in
-    getCurrentUser()
-      .then(() => fetchReports())
-      .catch(() => router.push("/"));
-  }, [router]);
+    setDate(new Date().toISOString().split("T")[0]);
+  }, []);
 
-  // Show loading state while auth check and initial fetch are in progress
+  // Effect 2: route guard + fetch. Runs once the date exists and again
+  // whenever the date picker changes.
+  useEffect(() => {
+    if (!date) return;
+    getCurrentUser()
+      .then(() => fetchReports(date))
+      .catch(() => router.push("/"));
+  }, [date, router]);
+
   if (loading)
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -66,13 +61,26 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      <header className="bg-white shadow">
+        <div className="max-w-7xl mx-auto px-4 py-6 flex justify-between items-center">
+          <h1 className="text-3xl font-bold text-gray-900">Owner Dashboard</h1>
+          {/* Changing the date re-triggers the fetch effect */}
+          <input
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            className="border rounded px-3 py-2"
+          />
+        </div>
+      </header>
+
       <main className="max-w-7xl mx-auto py-6 px-4">
         {reports.length === 0 ? (
           <div className="text-center text-gray-500 mt-20">
             No reports found for {date}
           </div>
         ) : (
-          // Responsive grid — 1 col mobile, 2 tablet, 3 desktop
+          // Responsive grid: 1 col mobile, 2 tablet, 3 desktop
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {reports.map((report) => (
               <div
