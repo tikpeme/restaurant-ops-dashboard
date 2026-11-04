@@ -72,7 +72,14 @@ export class AuthStack extends cdk.Stack {
           cognito.OAuthScope.EMAIL,
           cognito.OAuthScope.PROFILE,
         ],
-        callbackUrls: ["http://localhost:3000/"],
+        callbackUrls: [
+          "http://localhost:3000/",
+          "https://main.d2el5wphqyojln.amplifyapp.com/",
+        ],
+        logoutUrls: [
+          "http://localhost:3000/",
+          "https://main.d2el5wphqyojln.amplifyapp.com/",
+        ],
       },
       // Explicitly declare Google as a supported provider
       supportedIdentityProviders: [

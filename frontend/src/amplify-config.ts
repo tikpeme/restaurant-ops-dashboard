@@ -5,11 +5,17 @@ const amplifyConfig = {
       userPoolClientId: process.env.NEXT_PUBLIC_USER_POOL_CLIENT_ID!,
       loginWith: {
         oauth: {
-          domain: 'restaurant-ops-dashboard.auth.us-east-2.amazoncognito.com',
-          scopes: ['openid', 'email', 'profile'],
-          redirectSignIn: ['http://localhost:3000/'],
-          redirectSignOut: ['http://localhost:3000/'],
-          responseType: 'code' as const,
+          domain: "restaurant-ops-dashboard.auth.us-east-2.amazoncognito.com",
+          scopes: ["openid", "email", "profile"],
+          redirectSignIn: [
+            "http://localhost:3000/",
+            "https://main.d2el5wphqyojln.amplifyapp.com/",
+          ],
+          redirectSignOut: [
+            "http://localhost:3000/",
+            "https://main.d2el5wphqyojln.amplifyapp.com/",
+          ],
+          responseType: "code" as const,
         },
       },
     },
