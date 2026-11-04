@@ -3,59 +3,86 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { getCurrentUser, fetchAuthSession } from "aws-amplify/auth";
+import type { Report } from "../../types";
 
-// API URL from environment variables, never hardcoded
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
+
+// Local calendar date. toISOString() is UTC, which is already "tomorrow" in the
+// evening in Detroit, and the manager page submits with the local date.
+const localDate = () => {
+  const d = new Date();
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000)
+    .toISOString()
+    .split("T")[0];
+};
 
 export default function DashboardPage() {
   const router = useRouter();
+  const [status, setStatus] = useState<"loading" | "ready" | "denied">(
+    "loading",
+  );
+  const [reports, setReports] = useState<Report[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  // What the user picked. null means "today", resolved in the browser inside the effect.
+  const [pickedDate, setPickedDate] = useState<string | null>(null);
+  // The date actually loaded, used for the picker and the empty-state message
+  const [shownDate, setShownDate] = useState("");
 
-  // loading: prevents rendering before the first fetch completes
-  const [loading, setLoading] = useState(true);
-  // reports: array of location report objects from the API
-  const [reports, setReports] = useState<any[]>([]);
-  // date starts empty and is set in useEffect, so "today" is computed in the
-  // browser instead of being frozen at build time
-  const [date, setDate] = useState("");
-
-  const fetchReports = async (reportDate: string) => {
-    try {
-      // Get the JWT from the current Cognito session
+  useEffect(() => {
+    const load = async () => {
+      try {
+        await getCurrentUser();
+      } catch {
+        router.push("/");
+        return;
+      }
       const session = await fetchAuthSession();
-      const token = session.tokens?.idToken?.toString();
+      const groups =
+        (session.tokens?.idToken?.payload["cognito:groups"] as
+          | string[]
+          | undefined) ?? [];
 
-      // API Gateway verifies the token against Cognito before invoking Lambda
-      const response = await fetch(`${API_URL}/reports?date=${reportDate}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      // Managers belong on their own page. Users in no group have no access.
+      if (groups.includes("Managers") && !groups.includes("Owners")) {
+        router.push("/manager");
+        return;
+      }
+      if (!groups.includes("Owners") && !groups.includes("Investors")) {
+        setStatus("denied");
+        return;
+      }
 
-      const data = await response.json();
-      setReports(data.reports || []);
-    } catch (error) {
-      console.error("Error fetching reports:", error);
-    } finally {
-      setLoading(false);
-    }
-  };
+      const activeDate = pickedDate ?? localDate();
+      try {
+        const token = session.tokens?.idToken?.toString();
+        const response = await fetch(`${API_URL}/reports?date=${activeDate}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await response.json();
+        if (!response.ok)
+          throw new Error(data.message || "Failed to load reports");
+        setReports(data.reports || []);
+        setError(null);
+      } catch (e) {
+        setError((e as Error).message);
+      }
+      setShownDate(activeDate);
+      setStatus("ready");
+    };
+    load();
+  }, [pickedDate, router]);
 
-  // Effect 1: set today's date once, on mount (browser only)
-  useEffect(() => {
-    setDate(new Date().toISOString().split("T")[0]);
-  }, []);
-
-  // Effect 2: route guard + fetch. Runs once the date exists and again
-  // whenever the date picker changes.
-  useEffect(() => {
-    if (!date) return;
-    getCurrentUser()
-      .then(() => fetchReports(date))
-      .catch(() => router.push("/"));
-  }, [date, router]);
-
-  if (loading)
+  if (status === "loading")
     return (
       <div className="min-h-screen flex items-center justify-center">
         Loading...
+      </div>
+    );
+
+  if (status === "denied")
+    return (
+      <div className="min-h-screen flex items-center justify-center text-gray-600">
+        Your account has no access yet. Ask the owner to assign you a role.
       </div>
     );
 
@@ -64,20 +91,26 @@ export default function DashboardPage() {
       <header className="bg-white shadow">
         <div className="max-w-7xl mx-auto px-4 py-6 flex justify-between items-center">
           <h1 className="text-3xl font-bold text-gray-900">Owner Dashboard</h1>
-          {/* Changing the date re-triggers the fetch effect */}
+          {/* Picking a date changes pickedDate, which re-runs the load effect */}
           <input
             type="date"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
+            value={pickedDate ?? shownDate}
+            onChange={(e) => setPickedDate(e.target.value)}
             className="border rounded px-3 py-2"
           />
         </div>
       </header>
 
       <main className="max-w-7xl mx-auto py-6 px-4">
+        {error && (
+          <div className="mb-6 p-4 rounded-lg bg-red-50 text-red-800 border border-red-200">
+            {error}
+          </div>
+        )}
+
         {reports.length === 0 ? (
           <div className="text-center text-gray-500 mt-20">
-            No reports found for {date}
+            No reports found for {shownDate}
           </div>
         ) : (
           // Responsive grid: 1 col mobile, 2 tablet, 3 desktop
@@ -128,6 +161,14 @@ export default function DashboardPage() {
                     <span className="text-gray-500">Comps</span>
                     <span className="text-red-500">${report.comps}</span>
                   </div>
+                  {report.incidentNotes && (
+                    <div className="mt-2 pt-2 border-t">
+                      <span className="text-gray-500 text-sm">Notes: </span>
+                      <span className="text-gray-700 text-sm">
+                        {report.incidentNotes}
+                      </span>
+                    </div>
+                  )}
                 </div>
               </div>
             ))}

@@ -4,17 +4,27 @@ import { Authenticator } from "@aws-amplify/ui-react";
 import "@aws-amplify/ui-react/styles.css";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
-import { getCurrentUser } from "aws-amplify/auth";
+import { fetchAuthSession } from "aws-amplify/auth";
 
-export default function LoginPage() {
+// Rendered only once the user is signed in. It sends managers to /manager
+// and owners/investors to /dashboard.
+function RedirectByGroup() {
   const router = useRouter();
 
   useEffect(() => {
-    getCurrentUser()
-      .then(() => router.push("/dashboard"))
-      .catch(() => {});
+    fetchAuthSession().then((session) => {
+      const groups =
+        (session.tokens?.idToken?.payload["cognito:groups"] as
+          | string[]
+          | undefined) ?? [];
+      router.push(groups.includes("Managers") ? "/manager" : "/dashboard");
+    });
   }, [router]);
 
+  return <p className="text-center text-gray-600">Signing you in...</p>;
+}
+
+export default function LoginPage() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50">
       <div className="w-full max-w-md">
@@ -25,19 +35,7 @@ export default function LoginPage() {
           <p className="text-gray-500 mt-2">Sign in to access your dashboard</p>
         </div>
         <Authenticator hideSignUp={true} socialProviders={["google"]}>
-          {({ signOut, user }) => (
-            <div className="text-center">
-              <p className="text-gray-700">
-                Welcome, {user?.signInDetails?.loginId}
-              </p>
-              <button
-                onClick={() => router.push("/dashboard")}
-                className="mt-4 bg-blue-600 text-white px-6 py-2 rounded-lg"
-              >
-                Go to Dashboard
-              </button>
-            </div>
-          )}
+          <RedirectByGroup />
         </Authenticator>
       </div>
     </div>
