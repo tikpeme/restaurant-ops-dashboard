@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { getCurrentUser, fetchAuthSession } from "aws-amplify/auth";
 import type { Report } from "../../types";
+import SignOutButton from "../SignOutButton";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
 
@@ -246,6 +247,7 @@ export default function ManagerPage() {
             >
               {showForm ? "Cancel" : "Submit Report"}
             </button>
+            <SignOutButton />
           </div>
         </div>
       </header>

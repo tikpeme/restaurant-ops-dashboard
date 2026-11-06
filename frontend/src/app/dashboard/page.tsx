@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { getCurrentUser, fetchAuthSession } from "aws-amplify/auth";
 import type { Report } from "../../types";
+import SignOutButton from "../SignOutButton";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
 
@@ -98,6 +99,7 @@ export default function DashboardPage() {
             onChange={(e) => setPickedDate(e.target.value)}
             className="border rounded px-3 py-2"
           />
+          <SignOutButton />
         </div>
       </header>
 
