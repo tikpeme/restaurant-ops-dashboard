@@ -155,6 +155,7 @@ Initial estimate for the proposal: under about $50 per month at the client's sca
 - The API allows CORS from any origin. Restrict to the Amplify domain for production.
 - No automated tests yet.
 - Use a custom EventBridge bus per domain, and add a dead-letter queue for failed alert deliveries.
+- “8 moderate advisories remain in the lint toolchain (minimatch under typescript-eslint); dev-only, not shipped to browsers.”
 
 ## Repository layout
 
