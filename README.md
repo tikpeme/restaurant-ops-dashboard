@@ -32,13 +32,13 @@ Lambda (Node 24, TypeScript)  ── role and location checks ──►  DynamoD
 
 Five CDK stacks (TypeScript):
 
-| Stack           | Contents                                                                                                                                                                   |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DatabaseStack` | DynamoDB table (partition key `locationId`, sort key `reportDate`, pay-per-request), GSI `reportDate-locationId-index` for the owner's all-locations view, Streams enabled |
-| `ArchiveStack`  | Versioned, encrypted S3 bucket with a lifecycle rule moving objects to Glacier after 2 years                                                                               |
-| `AuthStack`     | Cognito user pool, Google identity provider, app client, groups `Owners` / `Managers` / `Investors`, custom attribute `locationId`                                         |
-| `AlertsStack`   | SNS topic, EventBridge rule, email subscription, readable message template                                                                                                 |
-| `ApiStack`      | REST API, Cognito authorizer, single Lambda bundled with esbuild, CORS on gateway-generated errors                                                                         |
+| Stack           | Contents                                                                                                                                                                                           |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DatabaseStack` | DynamoDB table (partition key `locationId`, sort key `reportDate`, pay-per-request, point-in-time recovery), GSI `reportDate-locationId-index` for the owner's all-locations view, Streams enabled |
+| `ArchiveStack`  | Versioned, encrypted S3 bucket with a lifecycle rule moving objects to Glacier after 2 years                                                                                                       |
+| `AuthStack`     | Cognito user pool, Google identity provider, app client, groups `Owners` / `Managers` / `Investors`, custom attribute `locationId`                                                                 |
+| `AlertsStack`   | SNS topic, EventBridge rule, email subscription, readable message template                                                                                                                         |
+| `ApiStack`      | REST API, Cognito authorizer, single Lambda bundled with esbuild, CORS on gateway-generated errors                                                                                                 |
 
 The frontend (`frontend/`) is Next.js (App Router) with Tailwind, hosted on AWS Amplify and built from this monorepo. The Lambda is in `backend/`.
 
@@ -70,13 +70,13 @@ The frontend (`frontend/`) is Next.js (App Router) with Tailwind, hosted on AWS 
 - **No silent overwrites.** Creating a report uses `attribute_not_exists(locationId)`, so a duplicate for the same location and date returns 409. Managers can only file for today or yesterday, so they cannot backdate a report to gain a fresh edit window.
 - **Server-side validation** repeats the form's rules (types, ranges, voids and comps not above revenue, notes under 500 characters).
 - **Secrets stay out of git.** The Google client ID and secret load from `infrastructure/.env` (gitignored) at deploy time. `NEXT_PUBLIC_*` values are public by design: a pool ID, client ID, and API URL are not secrets.
-- **Point-in-time recovery:** not yet enabled on the reports table (see limitations).
+- **Point-in-time recovery** is enabled on the reports table (35-day restore window).
 
 ## Running it
 
 ### Prerequisites
 
-Node 20, AWS CLI configured, AWS CDK, and a Google OAuth client (web application) whose redirect URI is `https://<cognito-domain>.auth.<region>.amazoncognito.com/oauth2/idpresponse`.
+Node 20 or 22, AWS CLI configured, AWS CDK, and a Google OAuth client (web application) whose redirect URI is `https://<cognito-domain>.auth.<region>.amazoncognito.com/oauth2/idpresponse`.
 
 ### Deploy the backend
 
@@ -146,12 +146,12 @@ Initial estimate for the proposal: under about $50 per month at the client's sca
 
 - Editing a report does not re-evaluate the low-revenue alert.
 - Archive from DynamoDB to S3 is not implemented. When it is, add a rule to expire old object versions (the bucket is versioned), and decide whether the Glacier clock should start at archive time or report age.
-- No point-in-time recovery on the reports table. Retain-on-delete protects against stack deletion, not against bad writes.
 - Report queries are not paginated, so a location's history will eventually be truncated at DynamoDB's 1 MB query limit.
 - Owners can view but not submit reports.
 - Report dates use UTC on the server and local time in the browser. A configured restaurant timezone would remove the evening mismatch.
 - Google OAuth is in testing mode (100 test-user limit, periodic re-consent). Publishing the app would lift this.
 - `frontend/.npmrc` sets `legacy-peer-deps=true` because Amplify UI declares support only up to React 18. Revisit when Amplify UI supports React 19.
+- The Amplify build image currently runs Node 22 while local development used Node 20. Both build successfully.
 - The API allows CORS from any origin. Restrict to the Amplify domain for production.
 - No automated tests yet.
 - Use a custom EventBridge bus per domain, and add a dead-letter queue for failed alert deliveries.
