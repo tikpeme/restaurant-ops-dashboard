@@ -33,6 +33,9 @@ export default function ManagerPage() {
     type: "success" | "error";
     text: string;
   } | null>(null);
+  // Wall-clock time in seconds, refreshed whenever reports load.
+  // Kept in state so render stays pure.
+  const [nowSeconds, setNowSeconds] = useState(0);
 
   const getToken = async () =>
     (await fetchAuthSession()).tokens?.idToken?.toString();
@@ -48,6 +51,7 @@ export default function ManagerPage() {
       if (!response.ok)
         throw new Error(data.message || "Failed to load reports");
       setReports(data.reports || []);
+      setNowSeconds(Math.floor(Date.now() / 1000));
     } catch (e) {
       setMessage({ type: "error", text: (e as Error).message });
     }
@@ -82,9 +86,8 @@ export default function ManagerPage() {
     init();
   }, [router, fetchReports]);
 
-  // Can this report still be edited? The server re-checks this atomically on every PUT.
   const isEditable = (r: Report) =>
-    r.editableUntil !== undefined && r.editableUntil > Date.now() / 1000;
+    r.editableUntil !== undefined && r.editableUntil > nowSeconds;
 
   const handleSubmit = async (values: {
     revenue: number;
