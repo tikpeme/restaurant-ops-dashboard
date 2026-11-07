@@ -11,4 +11,6 @@ export interface Report {
   voids: number;
   comps: number;
   incidentNotes?: string;
+  // Unix seconds. The report can be edited until this time passes.
+  editableUntil?: number;
 }

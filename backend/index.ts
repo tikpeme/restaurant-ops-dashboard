@@ -30,16 +30,16 @@ const json = (statusCode: number, body: unknown): APIGatewayProxyResult => ({
   body: JSON.stringify(body),
 });
 
-// Who is calling? Read from the token API Gateway already verified against
-// Cognito. Never trust the request body or URL for identity.
+// Identity comes from the token API Gateway already verified against Cognito.
+// Never trust the request body or URL for identity.
 const getCaller = (event: APIGatewayProxyEvent) => {
   const claims = event.requestContext.authorizer?.claims ?? {};
-  // API Gateway flattens the groups array into a string such as "[Owners]",
-  // so split it back apart leniently
+  // API Gateway flattens the groups array into a string such as "[Owners]"
   const groups = String(claims["cognito:groups"] ?? "")
     .split(/[\s,\[\]]+/)
     .filter(Boolean);
   return {
+    sub: claims.sub as string | undefined,
     isOwner: groups.includes("Owners"),
     isManager: groups.includes("Managers"),
     isInvestor: groups.includes("Investors"),
@@ -47,11 +47,29 @@ const getCaller = (event: APIGatewayProxyEvent) => {
   };
 };
 
+// Returns null for malformed JSON so the caller can answer 400 instead of 500
+const parseBody = (event: APIGatewayProxyEvent): Record<string, any> | null => {
+  try {
+    const parsed = JSON.parse(event.body || "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed
+      : null;
+  } catch {
+    return null;
+  }
+};
+
+// Adjust this pattern if your location IDs are named differently
+const LOCATION_ID_PATTERN = /^location-\d+$/;
+
 const isMoney = (v: unknown) =>
   typeof v === "number" && Number.isFinite(v) && v >= 0;
 
 // Server-side validation. The browser's checks can be bypassed by calling the API directly.
-const validateReport = (body: any, reportDate: string): string | null => {
+const validateReport = (
+  body: Record<string, any>,
+  reportDate: string,
+): string | null => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(reportDate))
     return "reportDate must be YYYY-MM-DD";
   if (!isMoney(body.revenue)) return "revenue must be a non-negative number";
@@ -61,6 +79,8 @@ const validateReport = (body: any, reportDate: string): string | null => {
     return "coversServed must be a whole number above 0";
   if (!isMoney(body.voids)) return "voids must be a non-negative number";
   if (!isMoney(body.comps)) return "comps must be a non-negative number";
+  if (body.voids > body.revenue) return "voids cannot exceed revenue";
+  if (body.comps > body.revenue) return "comps cannot exceed revenue";
   if (
     body.incidentNotes !== undefined &&
     (typeof body.incidentNotes !== "string" || body.incidentNotes.length > 500)
@@ -83,7 +103,10 @@ export const handler = async (
       if (!caller.isOwner && !caller.isManager)
         return json(403, { message: "Not authorized" });
 
-      const body = JSON.parse(event.body || "{}");
+      const body = parseBody(event);
+      if (!body)
+        return json(400, { message: "Request body must be valid JSON" });
+
       // A manager's location comes from the token and the body is ignored
       const reportLocation = caller.isOwner
         ? body.locationId
@@ -92,12 +115,29 @@ export const handler = async (
         return caller.isOwner
           ? json(400, { message: "locationId is required" })
           : json(403, { message: "No location assigned to this user" });
+      if (
+        typeof reportLocation !== "string" ||
+        !LOCATION_ID_PATTERN.test(reportLocation)
+      )
+        return json(400, { message: "locationId is not a valid location" });
 
       const invalid = validateReport(body, body.reportDate);
       if (invalid) return json(400, { message: invalid });
 
+      // Managers can't backdate reports to get a fresh 24-hour edit window.
+      // Today and yesterday (UTC) cover the evening gap for US time zones.
+      if (caller.isManager) {
+        const now = Date.now();
+        const allowed = [now, now - 86400000].map((t) =>
+          new Date(t).toISOString().slice(0, 10),
+        );
+        if (!allowed.includes(body.reportDate))
+          return json(400, {
+            message: "Managers can only file for today or yesterday",
+          });
+      }
+
       const reportId = randomUUID();
-      // Lambda enforces the 24-hour edit window by checking this on every PUT
       const editableUntil = Math.floor(Date.now() / 1000) + 60 * 60 * 24;
 
       try {
@@ -109,7 +149,7 @@ export const handler = async (
               reportDate: body.reportDate,
               reportId,
               submittedAt: new Date().toISOString(),
-              submittedBy: event.requestContext.authorizer?.claims?.sub,
+              submittedBy: caller.sub,
               editableUntil,
               isArchived: false,
               avgSpendPerCover: body.revenue / body.coversServed,
@@ -120,8 +160,7 @@ export const handler = async (
               comps: body.comps,
               incidentNotes: body.incidentNotes ?? "",
             },
-            // Without this, a second POST for the same location and date would
-            // silently overwrite the report and bypass the 24-hour edit window
+            // A second POST for the same location and date must not overwrite
             ConditionExpression: "attribute_not_exists(locationId)",
           }),
         );
@@ -134,7 +173,7 @@ export const handler = async (
         throw error;
       }
 
-      // The alert is best-effort: a failed alert must not fail an already-saved report
+      // The alert is best-effort: a failed alert must not fail a saved report
       if (body.revenue < body.revenueTarget) {
         try {
           await eventBridgeClient.send(
@@ -211,38 +250,53 @@ export const handler = async (
       if (!allowed)
         return json(403, { message: "Not authorized for this location" });
 
-      const body = JSON.parse(event.body || "{}");
+      const body = parseBody(event);
+      if (!body)
+        return json(400, { message: "Request body must be valid JSON" });
+
       const invalid = validateReport(body, pathReportDate);
       if (invalid) return json(400, { message: invalid });
 
-      const existing = await docClient.send(
-        new GetCommand({
-          TableName: TABLE_NAME,
-          Key: { locationId: pathLocationId, reportDate: pathReportDate },
-        }),
-      );
-      if (!existing.Item) return json(404, { message: "Report not found" });
+      const key = { locationId: pathLocationId, reportDate: pathReportDate };
+      const nowSeconds = Math.floor(Date.now() / 1000);
 
-      if (existing.Item.editableUntil < Math.floor(Date.now() / 1000))
-        return json(403, { message: "Edit window has closed" });
-
-      await docClient.send(
-        new UpdateCommand({
-          TableName: TABLE_NAME,
-          Key: { locationId: pathLocationId, reportDate: pathReportDate },
-          UpdateExpression:
-            "SET revenue = :revenue, revenueTarget = :revenueTarget, coversServed = :coversServed, voids = :voids, comps = :comps, incidentNotes = :incidentNotes, avgSpendPerCover = :avgSpendPerCover",
-          ExpressionAttributeValues: {
-            ":revenue": body.revenue,
-            ":revenueTarget": body.revenueTarget,
-            ":coversServed": body.coversServed,
-            ":voids": body.voids,
-            ":comps": body.comps,
-            ":incidentNotes": body.incidentNotes ?? "",
-            ":avgSpendPerCover": body.revenue / body.coversServed,
-          },
-        }),
-      );
+      try {
+        await docClient.send(
+          new UpdateCommand({
+            TableName: TABLE_NAME,
+            Key: key,
+            UpdateExpression:
+              "SET revenue = :revenue, revenueTarget = :revenueTarget, coversServed = :coversServed, voids = :voids, comps = :comps, incidentNotes = :incidentNotes, avgSpendPerCover = :avgSpendPerCover, updatedAt = :updatedAt, updatedBy = :updatedBy",
+            // The existence and edit-window checks happen inside the write itself,
+            // so nothing can change between the check and the update
+            ConditionExpression:
+              "attribute_exists(locationId) AND editableUntil > :now",
+            ExpressionAttributeValues: {
+              ":revenue": body.revenue,
+              ":revenueTarget": body.revenueTarget,
+              ":coversServed": body.coversServed,
+              ":voids": body.voids,
+              ":comps": body.comps,
+              ":incidentNotes": body.incidentNotes ?? "",
+              ":avgSpendPerCover": body.revenue / body.coversServed,
+              ":updatedAt": new Date().toISOString(),
+              ":updatedBy": caller.sub,
+              ":now": nowSeconds,
+            },
+          }),
+        );
+      } catch (error) {
+        if ((error as Error).name === "ConditionalCheckFailedException") {
+          // The condition failed. Look up why, so we can answer 404 or 403.
+          const existing = await docClient.send(
+            new GetCommand({ TableName: TABLE_NAME, Key: key }),
+          );
+          return existing.Item
+            ? json(403, { message: "Edit window has closed" })
+            : json(404, { message: "Report not found" });
+        }
+        throw error;
+      }
       return json(200, { message: "Report updated successfully" });
     }
 
